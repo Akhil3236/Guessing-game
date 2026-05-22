@@ -149,6 +149,11 @@ h1 {
   color: var(--muted);
 }
 
+.field small {
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
 input {
   width: 100%;
   padding: 0.85rem 1rem;
@@ -171,6 +176,39 @@ input:focus {
 
 .secret-row input {
   letter-spacing: 0.25em;
+}
+
+/* Range inputs ------------------------------------------------------- */
+
+.range-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.range-row input {
+  text-align: center;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.range-row em {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-style: normal;
+  font-size: 0.85rem;
+}
+
+.range-badge {
+  display: inline-block;
+  margin: 0 0 1.1rem;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent);
+  background: rgba(251, 191, 36, 0.1);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  border-radius: 999px;
 }
 
 /* Lobby: divider + join row ----------------------------------------- */
@@ -206,7 +244,7 @@ input:focus {
 /* Code box (invite) -------------------------------------------------- */
 
 .code-box {
-  margin: 0.4rem 0 1.2rem;
+  margin: 0.4rem 0 0.8rem;
   padding: 1rem;
   font-size: 2.4rem;
   font-weight: 800;
@@ -338,37 +376,87 @@ input:focus {
   font-size: 0.72rem;
 }
 
-/* Guess history ------------------------------------------------------ */
+/* Shared guess feed -------------------------------------------------- */
 
-.history {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  margin-top: 0.9rem;
+.feed-wrap {
+  margin-top: 1.3rem;
 }
 
-.chip {
-  padding: 0.3rem 0.6rem;
+.feed-left {
+  text-align: left;
+}
+
+.feed-label {
+  margin: 0 0 0.5rem;
   font-size: 0.82rem;
-  font-weight: 600;
-  border-radius: 999px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.feed {
+  max-height: 210px;
+  overflow-y: auto;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.03);
+  border-radius: 0.7rem;
 }
 
-.chip-higher {
+.feed.empty {
+  padding: 0.9rem;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.feed-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.9rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.feed-row:last-child {
+  border-bottom: 0;
+}
+
+.feed-row.mine {
+  background: rgba(251, 191, 36, 0.07);
+}
+
+.feed-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed-value {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.feed-hint {
+  flex: 0 0 auto;
+  width: 5.2rem;
+  text-align: right;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.feed-hint.higher {
   color: var(--up);
-  border-color: rgba(56, 189, 248, 0.35);
 }
 
-.chip-lower {
+.feed-hint.lower {
   color: var(--down);
-  border-color: rgba(251, 113, 133, 0.35);
 }
 
-.chip-match {
+.feed-hint.match {
   color: var(--win);
-  border-color: rgba(74, 222, 128, 0.45);
 }
 
 /* Result ------------------------------------------------------------- */
@@ -377,7 +465,7 @@ input:focus {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.7rem;
-  margin: 0 0 1.4rem;
+  margin: 0 0 1.2rem;
 }
 
 .result-cell {
@@ -401,6 +489,11 @@ input:focus {
 .result-cell strong {
   font-size: 2rem;
   line-height: 1;
+}
+
+.result-cell small {
+  color: var(--muted);
+  font-size: 0.74rem;
 }
 
 /* Misc --------------------------------------------------------------- */

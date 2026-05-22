@@ -4,6 +4,9 @@
  * Serves the built client (in production) and runs the WebSocket game.
  * The server is authoritative: both secret numbers live here and are never
  * sent to the other player until the game is over.
+ *
+ * The host (room creator) picks the number range. Every guess is recorded
+ * in a shared log that both players can see.
  */
 import express from 'express';
 import { WebSocketServer } from 'ws';
@@ -14,8 +17,8 @@ import { existsSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
-const MIN = 1;
-const MAX = 100;
+const RANGE_FLOOR = 1;
+const RANGE_CEILING = 1000000;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no easily confused chars
 
 // --- HTTP: serve the built client --------------------------------------
@@ -51,13 +54,28 @@ function cleanName(name) {
 }
 
 function makePlayer(ws, name) {
-  return { ws, name: cleanName(name), secret: null, history: [] };
+  return { ws, name: cleanName(name), secret: null };
 }
 
-function parseNumber(value) {
+/** Validate the host's chosen range. Returns {min,max} or null. */
+function parseRange(min, max) {
+  const lo = Number.parseInt(min, 10);
+  const hi = Number.parseInt(max, 10);
+  if (!Number.isInteger(lo) || !Number.isInteger(hi)) return null;
+  if (lo < RANGE_FLOOR || hi > RANGE_CEILING) return null;
+  if (hi <= lo) return null;
+  return { min: lo, max: hi };
+}
+
+/** Validate a number against a room's range. Returns the int or null. */
+function parseNumber(value, min, max) {
   const n = Number.parseInt(value, 10);
-  if (!Number.isInteger(n) || n < MIN || n > MAX) return null;
+  if (!Number.isInteger(n) || n < min || n > max) return null;
   return n;
+}
+
+function guessCount(room, index) {
+  return room.log.reduce((sum, entry) => sum + (entry.by === index ? 1 : 0), 0);
 }
 
 function send(ws, payload) {
@@ -77,22 +95,26 @@ function viewFor(room, index) {
     code: room.code,
     you: index,
     phase: room.phase,
+    min: room.min,
+    max: room.max,
     turn: room.turn,
     yourTurn: room.phase === 'playing' && room.turn === index,
     me: {
       name: me.name,
       secretSet: me.secret !== null,
-      guesses: me.history.length,
+      guesses: guessCount(room, index),
     },
     opponent: opp
       ? {
           name: opp.name,
           connected: !!opp.ws && opp.ws.readyState === 1,
           secretSet: opp.secret !== null,
-          guesses: opp.history.length,
+          guesses: guessCount(room, 1 - index),
         }
       : null,
-    history: me.history,
+    // Every guess from both players — safe to share: a guess reveals
+    // nothing about the guesser's own secret, only the target's.
+    log: room.log,
     winner: room.winner,
     endReason: room.endReason,
     // Opponent's number is only ever revealed once the game is over.
@@ -111,7 +133,14 @@ function broadcast(room) {
 
 // --- Actions -----------------------------------------------------------
 
-function createRoom(ws, name) {
+function createRoom(ws, name, min, max) {
+  const range = parseRange(min, max);
+  if (!range) {
+    return send(ws, {
+      type: 'error',
+      message: `Pick a valid range (whole numbers, ${RANGE_FLOOR}–${RANGE_CEILING}, low below high).`,
+    });
+  }
   detach(ws);
   const room = {
     code: makeCode(),
@@ -120,6 +149,9 @@ function createRoom(ws, name) {
     turn: 0,
     winner: null,
     endReason: null,
+    min: range.min,
+    max: range.max,
+    log: [],
   };
   rooms.set(room.code, room);
   ws.roomCode = room.code;
@@ -149,11 +181,11 @@ function setSecret(ws, value) {
   const me = room.players[ws.playerIndex];
   if (!me || me.ws !== ws) return;
 
-  const n = parseNumber(value);
+  const n = parseNumber(value, room.min, room.max);
   if (n === null) {
     return send(ws, {
       type: 'error',
-      message: `Pick a whole number between ${MIN} and ${MAX}.`,
+      message: `Pick a whole number between ${room.min} and ${room.max}.`,
     });
   }
   me.secret = n;
@@ -175,16 +207,16 @@ function makeGuess(ws, value) {
   const opp = room.players[1 - i];
   if (!me || me.ws !== ws || !opp) return;
 
-  const n = parseNumber(value);
+  const n = parseNumber(value, room.min, room.max);
   if (n === null) {
     return send(ws, {
       type: 'error',
-      message: `Enter a whole number between ${MIN} and ${MAX}.`,
+      message: `Enter a whole number between ${room.min} and ${room.max}.`,
     });
   }
 
   const hint = n === opp.secret ? 'match' : n < opp.secret ? 'higher' : 'lower';
-  me.history.push({ value: n, hint });
+  room.log.push({ by: i, name: me.name, value: n, hint });
 
   if (hint === 'match') {
     room.phase = 'over';
@@ -203,8 +235,8 @@ function rematch(ws) {
 
   room.players.forEach((p) => {
     p.secret = null;
-    p.history = [];
   });
+  room.log = [];
   room.phase = 'setup';
   room.turn = 0;
   room.winner = null;
@@ -259,7 +291,7 @@ wss.on('connection', (ws) => {
     }
     switch (msg.type) {
       case 'create':
-        return createRoom(ws, msg.name);
+        return createRoom(ws, msg.name, msg.min, msg.max);
       case 'join':
         return joinRoom(ws, msg.name, msg.code);
       case 'secret':

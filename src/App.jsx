@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
-const MIN = 1;
-const MAX = 100;
+const RANGE_FLOOR = 1;
+const RANGE_CEILING = 1000000;
 
 function wsUrl() {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -9,7 +9,7 @@ function wsUrl() {
 }
 
 function onlyDigits(value) {
-  return value.replace(/[^0-9]/g, '').slice(0, 3);
+  return value.replace(/[^0-9]/g, '').slice(0, 7);
 }
 
 function codeFromUrl() {
@@ -25,6 +25,8 @@ export default function App() {
 
   const [name, setName] = useState('');
   const [code, setCode] = useState(codeFromUrl);
+  const [rangeMin, setRangeMin] = useState('1');
+  const [rangeMax, setRangeMax] = useState('100');
   const [secretDraft, setSecretDraft] = useState('');
   const [reveal, setReveal] = useState(false);
   const [guessDraft, setGuessDraft] = useState('');
@@ -58,11 +60,22 @@ export default function App() {
     }
   };
 
+  // --- range validation (host only) ------------------------------------
+
+  const lo = Number.parseInt(rangeMin, 10);
+  const hi = Number.parseInt(rangeMax, 10);
+  const rangeValid =
+    Number.isInteger(lo) &&
+    Number.isInteger(hi) &&
+    lo >= RANGE_FLOOR &&
+    hi <= RANGE_CEILING &&
+    hi > lo;
+
   // --- actions ---------------------------------------------------------
 
   const createGame = () => {
     setError('');
-    send({ type: 'create', name });
+    send({ type: 'create', name, min: rangeMin, max: rangeMax });
   };
   const joinGame = () => {
     setError('');
@@ -104,7 +117,7 @@ export default function App() {
     );
   };
 
-  // --- screen helpers --------------------------------------------------
+  // --- derived ---------------------------------------------------------
 
   const phase = game ? game.phase : 'home';
   const step =
@@ -116,7 +129,39 @@ export default function App() {
           ? 3
           : 4;
 
-  const lastHint = game && game.history.length ? game.history[game.history.length - 1] : null;
+  const myLog = game ? game.log.filter((entry) => entry.by === game.you) : [];
+  const lastMine = myLog.length ? myLog[myLog.length - 1] : null;
+
+  // Shared guess feed — every guess from both players, newest first.
+  const feed = game ? (
+    <div className="feed-wrap">
+      <p className="feed-label">All guesses ({game.log.length})</p>
+      {game.log.length === 0 ? (
+        <div className="feed empty">No guesses yet.</div>
+      ) : (
+        <div className="feed">
+          {game.log
+            .map((entry, i) => ({ ...entry, id: i }))
+            .reverse()
+            .map((entry) => (
+              <div key={entry.id} className={`feed-row ${entry.by === game.you ? 'mine' : ''}`}>
+                <span className="feed-name">
+                  {entry.by === game.you ? 'You' : entry.name}
+                </span>
+                <span className="feed-value">{entry.value}</span>
+                <span className={`feed-hint ${entry.hint}`}>
+                  {entry.hint === 'higher'
+                    ? '↑ higher'
+                    : entry.hint === 'lower'
+                      ? '↓ lower'
+                      : '✓ correct'}
+                </span>
+              </div>
+            ))}
+        </div>
+      )}
+    </div>
+  ) : null;
 
   return (
     <main className="shell">
@@ -140,9 +185,7 @@ export default function App() {
           <section className="screen center">
             <p className="kicker">Connection lost</p>
             <h1>You got disconnected</h1>
-            <p className="lede">
-              The link to the game server dropped. Reload to start again.
-            </p>
+            <p className="lede">The link to the game server dropped. Reload to start again.</p>
             <button className="btn primary" type="button" onClick={() => window.location.reload()}>
               Reload
             </button>
@@ -154,8 +197,8 @@ export default function App() {
           <section className="screen">
             <h1>Play a friend, anywhere</h1>
             <p className="lede">
-              Two players, two devices. Each picks a secret number from {MIN} to {MAX} — then you
-              race to crack each other&apos;s number with higher / lower hints.
+              Two players, two devices. The host sets the number range — then you race to crack
+              each other&apos;s secret number with higher / lower hints.
             </p>
             <div className="form">
               <label className="field">
@@ -168,16 +211,44 @@ export default function App() {
                 />
               </label>
 
+              <div className="field">
+                <span>Number range (you&apos;re the host)</span>
+                <div className="range-row">
+                  <input
+                    inputMode="numeric"
+                    aria-label="Lowest number"
+                    value={rangeMin}
+                    onChange={(event) => setRangeMin(onlyDigits(event.target.value))}
+                    placeholder="1"
+                  />
+                  <em>to</em>
+                  <input
+                    inputMode="numeric"
+                    aria-label="Highest number"
+                    value={rangeMax}
+                    onChange={(event) => setRangeMax(onlyDigits(event.target.value))}
+                    placeholder="100"
+                  />
+                </div>
+                <small className={rangeValid ? 'muted' : 'error'}>
+                  {rangeValid
+                    ? `Both players pick a secret number from ${lo} to ${hi}.`
+                    : `Low must be ≥ ${RANGE_FLOOR}, high ≤ ${RANGE_CEILING}, and low below high.`}
+                </small>
+              </div>
+
               <button
                 className="btn primary"
                 type="button"
                 onClick={createGame}
-                disabled={conn !== 'open' || !name.trim()}
+                disabled={conn !== 'open' || !name.trim() || !rangeValid}
               >
                 Create a game
               </button>
 
-              <div className="divider"><span>or join with a code</span></div>
+              <div className="divider">
+                <span>or join with a code</span>
+              </div>
 
               <div className="join-row">
                 <input
@@ -212,6 +283,9 @@ export default function App() {
             <h1>Invite your friend</h1>
             <p className="lede">Share this code. The game starts the moment they join.</p>
             <div className="code-box">{game.code}</div>
+            <p className="range-badge">
+              Range {game.min} – {game.max}
+            </p>
             <button className="btn primary" type="button" onClick={copyInvite}>
               {copied ? 'Link copied!' : 'Copy invite link'}
             </button>
@@ -227,6 +301,9 @@ export default function App() {
           <section className="screen">
             <p className="kicker">Playing against {game.opponent?.name}</p>
             <h1>Set your secret number</h1>
+            <p className="range-badge">
+              Range {game.min} – {game.max}
+            </p>
             {game.me.secretSet ? (
               <>
                 <div className="hint hint-match">Your number is locked in.</div>
@@ -237,7 +314,7 @@ export default function App() {
             ) : (
               <>
                 <p className="lede">
-                  Pick a number from {MIN} to {MAX}. It stays on the server —
+                  Pick a number from {game.min} to {game.max}. It stays on the server —
                   {' '}{game.opponent?.name} never sees it.
                 </p>
                 <form className="form" onSubmit={lockSecret}>
@@ -254,7 +331,7 @@ export default function App() {
                         spellCheck={false}
                         value={secretDraft}
                         onChange={(event) => setSecretDraft(onlyDigits(event.target.value))}
-                        placeholder={`${MIN} – ${MAX}`}
+                        placeholder={`${game.min} – ${game.max}`}
                       />
                       <button
                         className="btn ghost eye"
@@ -281,24 +358,24 @@ export default function App() {
             <p className="kicker">You vs {game.opponent?.name}</p>
             <h1>Crack {game.opponent?.name}&apos;s number</h1>
 
-            <div className={`hint hint-${lastHint ? lastHint.hint : 'idle'}`}>
-              {lastHint
-                ? lastHint.hint === 'higher'
-                  ? `Go higher than ${lastHint.value} ↑`
-                  : `Go lower than ${lastHint.value} ↓`
-                : `Their number is somewhere from ${MIN} to ${MAX}`}
+            <div className={`hint hint-${lastMine ? lastMine.hint : 'idle'}`}>
+              {lastMine
+                ? lastMine.hint === 'higher'
+                  ? `Go higher than ${lastMine.value} ↑`
+                  : `Go lower than ${lastMine.value} ↓`
+                : `Their number is somewhere from ${game.min} to ${game.max}`}
             </div>
 
             {game.yourTurn ? (
               <form className="form" onSubmit={submitGuess}>
                 <label className="field">
-                  <span>Your guess</span>
+                  <span>Your guess ({game.min}–{game.max})</span>
                   <input
                     inputMode="numeric"
                     autoComplete="off"
                     value={guessDraft}
                     onChange={(event) => setGuessDraft(onlyDigits(event.target.value))}
-                    placeholder={`${MIN} – ${MAX}`}
+                    placeholder={`${game.min} – ${game.max}`}
                     autoFocus
                   />
                 </label>
@@ -324,16 +401,7 @@ export default function App() {
               </div>
             </div>
 
-            {game.history.length > 0 && (
-              <div className="history">
-                {game.history.map((item, i) => (
-                  <span key={`${item.value}-${i}`} className={`chip chip-${item.hint}`}>
-                    {item.value}
-                    {item.hint === 'higher' ? ' ↑' : item.hint === 'lower' ? ' ↓' : ' ✓'}
-                  </span>
-                ))}
-              </div>
-            )}
+            {feed}
           </section>
         )}
 
@@ -353,16 +421,22 @@ export default function App() {
               <>
                 <p className="kicker">Game over</p>
                 <h1>{game.winner === game.you ? 'You win! 🎉' : `${game.opponent?.name} wins`}</h1>
+                <p className="range-badge">
+                  Range was {game.min} – {game.max}
+                </p>
                 <div className="result-grid">
                   <div className={`result-cell ${game.winner === game.you ? 'win' : ''}`}>
                     <span>Your number</span>
                     <strong>{game.reveal?.yourNumber ?? '—'}</strong>
+                    <small>{game.me.guesses} guesses</small>
                   </div>
                   <div className={`result-cell ${game.winner !== game.you ? 'win' : ''}`}>
                     <span>{game.opponent?.name}&apos;s number</span>
                     <strong>{game.reveal?.opponentNumber ?? '—'}</strong>
+                    <small>{game.opponent?.guesses ?? 0} guesses</small>
                   </div>
                 </div>
+                <div className="feed-left">{feed}</div>
                 <div className="form">
                   {game.opponent?.connected && (
                     <button className="btn primary" type="button" onClick={playAgain}>
