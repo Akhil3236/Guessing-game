@@ -1,54 +1,65 @@
 import { useEffect, useRef, useState } from 'react';
-import confetti from 'canvas-confetti';
+import HigherLower from './games/HigherLower.jsx';
+import TicTacToe from './games/TicTacToe.jsx';
+import Connect4 from './games/Connect4.jsx';
+import RockPaperScissors from './games/RockPaperScissors.jsx';
+import Hangman from './games/Hangman.jsx';
 
-const RANGE_FLOOR = 1;
-const RANGE_CEILING = 1000000;
-
-function reducedMotion() {
-  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-}
-
-/** Celebratory confetti — a center burst plus a short side-cannon volley. */
-function celebrate() {
-  if (reducedMotion()) return;
-  const colors = ['#fbbf24', '#38bdf8', '#4ade80', '#fb7185', '#ffffff'];
-  confetti({ particleCount: 150, spread: 95, startVelocity: 45, origin: { y: 0.6 }, colors });
-  const end = Date.now() + 1400;
-  (function frame() {
-    confetti({ particleCount: 5, angle: 60, spread: 65, origin: { x: 0 }, colors });
-    confetti({ particleCount: 5, angle: 120, spread: 65, origin: { x: 1 }, colors });
-    if (Date.now() < end) requestAnimationFrame(frame);
-  })();
-}
+const GAMES = {
+  'higher-lower': {
+    name: 'Higher / Lower',
+    icon: '🔢',
+    tag: 'Crack the secret number',
+    component: HigherLower,
+  },
+  'tic-tac-toe': {
+    name: 'Tic-Tac-Toe',
+    icon: '⭕',
+    tag: 'Three in a row wins',
+    component: TicTacToe,
+  },
+  'connect-4': {
+    name: 'Connect 4',
+    icon: '🔴',
+    tag: 'Line up four discs',
+    component: Connect4,
+  },
+  'rock-paper-scissors': {
+    name: 'Rock Paper Scissors',
+    icon: '✊',
+    tag: 'Best of five — first to 3',
+    component: RockPaperScissors,
+  },
+  hangman: {
+    name: 'Hangman',
+    icon: '🔤',
+    tag: 'Guess the hidden word',
+    component: Hangman,
+  },
+};
+const GAME_ORDER = ['higher-lower', 'tic-tac-toe', 'connect-4', 'rock-paper-scissors', 'hangman'];
 
 function wsUrl() {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
   return `${proto}://${window.location.host}/ws`;
 }
-
-function onlyDigits(value) {
-  return value.replace(/[^0-9]/g, '').slice(0, 7);
-}
-
 function codeFromUrl() {
-  const fromQuery = new URLSearchParams(window.location.search).get('code') || '';
-  return fromQuery.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+  const q = new URLSearchParams(window.location.search).get('code') || '';
+  return q.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
 }
+const onlyDigits = (v) => v.replace(/[^0-9]/g, '').slice(0, 7);
 
 export default function App() {
   const ws = useRef(null);
-  const celebrated = useRef(false);
   const [conn, setConn] = useState('connecting'); // connecting | open | closed
-  const [game, setGame] = useState(null); // latest server state, or null at home
+  const [state, setState] = useState(null); // server room state, or null when not in a room
   const [error, setError] = useState('');
 
+  const [picked, setPicked] = useState(null); // game chosen in the lobby
   const [name, setName] = useState('');
   const [code, setCode] = useState(codeFromUrl);
   const [rangeMin, setRangeMin] = useState('1');
   const [rangeMax, setRangeMax] = useState('100');
-  const [secretDraft, setSecretDraft] = useState('');
-  const [reveal, setReveal] = useState(false);
-  const [guessDraft, setGuessDraft] = useState('');
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -64,7 +75,7 @@ export default function App() {
         return;
       }
       if (msg.type === 'state') {
-        setGame(msg);
+        setState(msg);
         setError('');
       } else if (msg.type === 'error') {
         setError(msg.message);
@@ -73,72 +84,39 @@ export default function App() {
     return () => socket.close();
   }, []);
 
-  // Fire confetti once, the moment *you* win.
-  useEffect(() => {
-    const youWon =
-      game && game.phase === 'over' && game.endReason === 'win' && game.winner === game.you;
-    if (youWon && !celebrated.current) {
-      celebrated.current = true;
-      celebrate();
-    } else if (!youWon) {
-      celebrated.current = false;
-    }
-  }, [game]);
-
   const send = (payload) => {
     if (ws.current && ws.current.readyState === 1) {
       ws.current.send(JSON.stringify(payload));
     }
   };
 
-  // --- range validation (host only) ------------------------------------
-
-  const lo = Number.parseInt(rangeMin, 10);
-  const hi = Number.parseInt(rangeMax, 10);
+  const rangeLo = Number.parseInt(rangeMin, 10);
+  const rangeHi = Number.parseInt(rangeMax, 10);
   const rangeValid =
-    Number.isInteger(lo) &&
-    Number.isInteger(hi) &&
-    lo >= RANGE_FLOOR &&
-    hi <= RANGE_CEILING &&
-    hi > lo;
-
-  // --- actions ---------------------------------------------------------
+    Number.isInteger(rangeLo) &&
+    Number.isInteger(rangeHi) &&
+    rangeLo >= 1 &&
+    rangeHi <= 1000000 &&
+    rangeHi > rangeLo;
 
   const createGame = () => {
     setError('');
-    send({ type: 'create', name, min: rangeMin, max: rangeMax });
+    const payload = { type: 'create', gameType: picked, name };
+    if (picked === 'higher-lower') payload.config = { min: rangeMin, max: rangeMax };
+    send(payload);
   };
   const joinGame = () => {
     setError('');
     send({ type: 'join', name, code });
   };
-  const lockSecret = (event) => {
-    event.preventDefault();
-    send({ type: 'secret', value: secretDraft });
-  };
-  const submitGuess = (event) => {
-    event.preventDefault();
-    if (guessDraft === '') return;
-    send({ type: 'guess', value: guessDraft });
-    setGuessDraft('');
-  };
-  const playAgain = () => {
-    setSecretDraft('');
-    setReveal(false);
-    setGuessDraft('');
-    send({ type: 'rematch' });
-  };
-  const newGame = () => {
+  const leave = () => {
     send({ type: 'leave' });
-    setGame(null);
-    setSecretDraft('');
-    setReveal(false);
-    setGuessDraft('');
+    setState(null);
+    setPicked(null);
     setError('');
   };
-
   const copyInvite = () => {
-    const link = `${window.location.origin}/?code=${game.code}`;
+    const link = `${window.location.origin}/?code=${state.code}`;
     navigator.clipboard?.writeText(link).then(
       () => {
         setCopied(true);
@@ -148,344 +126,221 @@ export default function App() {
     );
   };
 
-  // --- derived ---------------------------------------------------------
+  // --- pick the body ---------------------------------------------------
 
-  const phase = game ? game.phase : 'home';
-  const step =
-    phase === 'home' || phase === 'waiting'
-      ? 1
-      : phase === 'setup'
-        ? 2
-        : phase === 'playing'
-          ? 3
-          : 4;
+  let body;
 
-  // The server only ever sends a player their own guesses.
-  const lastMine = game && game.log.length ? game.log[game.log.length - 1] : null;
-
-  // Private guess feed — only your own guesses, newest first.
-  const feed = game ? (
-    <div className="feed-wrap">
-      <p className="feed-label">Your guesses ({game.log.length})</p>
-      {game.log.length === 0 ? (
-        <div className="feed empty">You haven&apos;t guessed yet.</div>
-      ) : (
-        <div className="feed">
-          {game.log
-            .map((entry, i) => ({ ...entry, num: i + 1 }))
-            .reverse()
-            .map((entry) => (
-              <div key={entry.num} className="feed-row">
-                <span className="feed-num">#{entry.num}</span>
-                <span className="feed-value">{entry.value}</span>
-                <span className={`feed-hint ${entry.hint}`}>
-                  {entry.hint === 'higher'
-                    ? '↑ higher'
-                    : entry.hint === 'lower'
-                      ? '↓ lower'
-                      : '✓ correct'}
-                </span>
-              </div>
-            ))}
+  if (conn === 'closed') {
+    body = (
+      <section className="screen center">
+        <p className="kicker">Connection lost</p>
+        <h1>You got disconnected</h1>
+        <p className="lede">The link to the game server dropped. Reload to start again.</p>
+        <button className="btn primary" type="button" onClick={() => window.location.reload()}>
+          Reload
+        </button>
+      </section>
+    );
+  } else if (state && state.phase === 'abandoned') {
+    body = (
+      <section className="screen center">
+        <p className="kicker">Game over</p>
+        <h1>Opponent left</h1>
+        <p className="lede">
+          {state.players[1 - state.you]?.name || 'Your opponent'} disconnected, so the game
+          ended.
+        </p>
+        <button className="btn primary" type="button" onClick={leave}>
+          Back to games
+        </button>
+      </section>
+    );
+  } else if (state && state.phase === 'waiting') {
+    body = (
+      <section className="screen center">
+        <p className="kicker">{GAMES[state.gameType]?.name}</p>
+        <h1>Invite your friend</h1>
+        <p className="lede">Share this code. The game starts the moment they join.</p>
+        <div className="code-box">{state.code}</div>
+        <button className="btn primary" type="button" onClick={copyInvite}>
+          {copied ? 'Link copied!' : 'Copy invite link'}
+        </button>
+        <p className="muted waiting">Waiting for an opponent to join…</p>
+        <button className="btn ghost" type="button" onClick={leave}>
+          Cancel
+        </button>
+      </section>
+    );
+  } else if (state && state.phase === 'started' && state.game) {
+    const GameComponent = GAMES[state.gameType].component;
+    body = (
+      <GameComponent
+        game={state.game}
+        players={state.players}
+        you={state.you}
+        send={send}
+        onLeave={leave}
+        error={error}
+      />
+    );
+  } else if (picked) {
+    body = (
+      <section className="screen">
+        <button
+          className="back-link"
+          type="button"
+          onClick={() => {
+            setPicked(null);
+            setError('');
+          }}
+        >
+          ← All games
+        </button>
+        <div className="lobby-head">
+          <span className="game-icon big">{GAMES[picked].icon}</span>
+          <div>
+            <h1>{GAMES[picked].name}</h1>
+            <p className="muted">{GAMES[picked].tag}</p>
+          </div>
         </div>
-      )}
-    </div>
-  ) : null;
+        <div className="form">
+          <label className="field">
+            <span>Your name</span>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Akhil"
+              maxLength={20}
+            />
+          </label>
+          {picked === 'higher-lower' && (
+            <div className="field">
+              <span>Number range</span>
+              <div className="range-row">
+                <input
+                  inputMode="numeric"
+                  aria-label="Lowest number"
+                  value={rangeMin}
+                  onChange={(e) => setRangeMin(onlyDigits(e.target.value))}
+                  placeholder="1"
+                />
+                <em>to</em>
+                <input
+                  inputMode="numeric"
+                  aria-label="Highest number"
+                  value={rangeMax}
+                  onChange={(e) => setRangeMax(onlyDigits(e.target.value))}
+                  placeholder="100"
+                />
+              </div>
+              <small className={rangeValid ? 'muted' : 'error'}>
+                {rangeValid
+                  ? `Secret numbers will run from ${rangeLo} to ${rangeHi}.`
+                  : 'Whole numbers, 1 and up, with the low below the high.'}
+              </small>
+            </div>
+          )}
+          <button
+            className="btn primary"
+            type="button"
+            onClick={createGame}
+            disabled={
+              conn !== 'open' || !name.trim() || (picked === 'higher-lower' && !rangeValid)
+            }
+          >
+            Create game
+          </button>
+          {error && <p className="error">{error}</p>}
+        </div>
+      </section>
+    );
+  } else {
+    body = (
+      <section className="screen">
+        <h1>Pick a game</h1>
+        <p className="lede">
+          Five two-player games. Choose one, share the code, and play with a friend anywhere.
+        </p>
+        <label className="field">
+          <span>Your name</span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Akhil"
+            maxLength={20}
+          />
+        </label>
+        <div className="game-grid">
+          {GAME_ORDER.map((id) => (
+            <button
+              key={id}
+              type="button"
+              className="game-card"
+              onClick={() => {
+                setError('');
+                setPicked(id);
+              }}
+            >
+              <span className="game-icon">{GAMES[id].icon}</span>
+              <span className="game-name">{GAMES[id].name}</span>
+              <span className="game-tag">{GAMES[id].tag}</span>
+            </button>
+          ))}
+        </div>
+        <div className="divider">
+          <span>or join a friend&apos;s game</span>
+        </div>
+        <div className="join-row">
+          <input
+            className="code-input"
+            value={code}
+            onChange={(e) =>
+              setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4))
+            }
+            placeholder="CODE"
+            aria-label="Game code"
+          />
+          <button
+            className="btn ghost"
+            type="button"
+            onClick={joinGame}
+            disabled={conn !== 'open' || !name.trim() || code.length < 4}
+          >
+            Join
+          </button>
+        </div>
+        {error && <p className="error">{error}</p>}
+        {conn === 'connecting' && <p className="muted">Connecting to the server…</p>}
+      </section>
+    );
+  }
+
+  const inGame =
+    state && (state.phase === 'started' || state.phase === 'waiting') && GAMES[state.gameType];
+
+  // Changing this key remounts the body so each new screen animates in.
+  let screenKey = 'hub';
+  if (conn === 'closed') screenKey = 'closed';
+  else if (state && state.phase === 'abandoned') screenKey = 'abandoned';
+  else if (state && state.phase === 'waiting') screenKey = 'waiting';
+  else if (state && state.phase === 'started' && state.game)
+    screenKey = `game-${state.gameType}-${state.game.status}`;
+  else if (picked) screenKey = `lobby-${picked}`;
 
   return (
     <main className="shell">
       <div className="card">
         <header className="top">
-          <p className="brand">Higher / Lower Duel</p>
-          <ol className="steps" aria-label="Game progress">
-            {['Lobby', 'Secrets', 'Duel', 'Result'].map((label, i) => (
-              <li
-                key={label}
-                className={`step ${i + 1 === step ? 'active' : ''} ${i + 1 < step ? 'done' : ''}`}
-              >
-                {label}
-              </li>
-            ))}
-          </ol>
+          <p className="brand">🕹️ Duel Arcade</p>
+          {inGame && (
+            <p className="brand-sub">
+              {GAMES[state.gameType].icon} {GAMES[state.gameType].name}
+            </p>
+          )}
         </header>
-
-        {/* Connection lost — covers everything else */}
-        {conn === 'closed' && (
-          <section className="screen center">
-            <p className="kicker">Connection lost</p>
-            <h1>You got disconnected</h1>
-            <p className="lede">The link to the game server dropped. Reload to start again.</p>
-            <button className="btn primary" type="button" onClick={() => window.location.reload()}>
-              Reload
-            </button>
-          </section>
-        )}
-
-        {/* Home / lobby */}
-        {conn !== 'closed' && phase === 'home' && (
-          <section className="screen">
-            <h1>Play a friend, anywhere</h1>
-            <p className="lede">
-              Two players, two devices. The host sets the number range — then you race to crack
-              each other&apos;s secret number with higher / lower hints.
-            </p>
-            <div className="form">
-              <label className="field">
-                <span>Your name</span>
-                <input
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder="e.g. Akhil"
-                  maxLength={20}
-                />
-              </label>
-
-              <div className="field">
-                <span>Number range (you&apos;re the host)</span>
-                <div className="range-row">
-                  <input
-                    inputMode="numeric"
-                    aria-label="Lowest number"
-                    value={rangeMin}
-                    onChange={(event) => setRangeMin(onlyDigits(event.target.value))}
-                    placeholder="1"
-                  />
-                  <em>to</em>
-                  <input
-                    inputMode="numeric"
-                    aria-label="Highest number"
-                    value={rangeMax}
-                    onChange={(event) => setRangeMax(onlyDigits(event.target.value))}
-                    placeholder="100"
-                  />
-                </div>
-                <small className={rangeValid ? 'muted' : 'error'}>
-                  {rangeValid
-                    ? `Both players pick a secret number from ${lo} to ${hi}.`
-                    : `Low must be ≥ ${RANGE_FLOOR}, high ≤ ${RANGE_CEILING}, and low below high.`}
-                </small>
-              </div>
-
-              <button
-                className="btn primary"
-                type="button"
-                onClick={createGame}
-                disabled={conn !== 'open' || !name.trim() || !rangeValid}
-              >
-                Create a game
-              </button>
-
-              <div className="divider">
-                <span>or join with a code</span>
-              </div>
-
-              <div className="join-row">
-                <input
-                  className="code-input"
-                  value={code}
-                  onChange={(event) =>
-                    setCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4))
-                  }
-                  placeholder="CODE"
-                  aria-label="Game code"
-                />
-                <button
-                  className="btn ghost"
-                  type="button"
-                  onClick={joinGame}
-                  disabled={conn !== 'open' || !name.trim() || code.length < 4}
-                >
-                  Join
-                </button>
-              </div>
-
-              {error && <p className="error">{error}</p>}
-              {conn === 'connecting' && <p className="muted">Connecting to the server…</p>}
-            </div>
-          </section>
-        )}
-
-        {/* Waiting for opponent */}
-        {conn !== 'closed' && phase === 'waiting' && (
-          <section className="screen center">
-            <p className="kicker">Game created</p>
-            <h1>Invite your friend</h1>
-            <p className="lede">Share this code. The game starts the moment they join.</p>
-            <div className="code-box">{game.code}</div>
-            <p className="range-badge">
-              Range {game.min} – {game.max}
-            </p>
-            <button className="btn primary" type="button" onClick={copyInvite}>
-              {copied ? 'Link copied!' : 'Copy invite link'}
-            </button>
-            <p className="muted waiting">Waiting for an opponent to join…</p>
-            <button className="btn ghost" type="button" onClick={newGame}>
-              Cancel
-            </button>
-          </section>
-        )}
-
-        {/* Choose secret number */}
-        {conn !== 'closed' && phase === 'setup' && (
-          <section className="screen">
-            <p className="kicker">Playing against {game.opponent?.name}</p>
-            <h1>Set your secret number</h1>
-            <p className="range-badge">
-              Range {game.min} – {game.max}
-            </p>
-            {game.me.secretSet ? (
-              <>
-                <div className="hint hint-match">Your number is locked in.</div>
-                <p className="lede waiting">
-                  Waiting for {game.opponent?.name} to choose their number…
-                </p>
-              </>
-            ) : (
-              <>
-                <p className="lede">
-                  Pick a number from {game.min} to {game.max}. It stays on the server —
-                  {' '}{game.opponent?.name} never sees it.
-                </p>
-                <form className="form" onSubmit={lockSecret}>
-                  <label className="field">
-                    <span>Your secret number</span>
-                    <div className="secret-row">
-                      <input
-                        name="s"
-                        type={reveal ? 'text' : 'password'}
-                        inputMode="numeric"
-                        autoComplete="off"
-                        autoCorrect="off"
-                        autoCapitalize="off"
-                        spellCheck={false}
-                        value={secretDraft}
-                        onChange={(event) => setSecretDraft(onlyDigits(event.target.value))}
-                        placeholder={`${game.min} – ${game.max}`}
-                      />
-                      <button
-                        className="btn ghost eye"
-                        type="button"
-                        onClick={() => setReveal((v) => !v)}
-                      >
-                        {reveal ? 'Hide' : 'Show'}
-                      </button>
-                    </div>
-                  </label>
-                  {error && <p className="error">{error}</p>}
-                  <button className="btn primary" type="submit">
-                    Lock it in
-                  </button>
-                </form>
-              </>
-            )}
-          </section>
-        )}
-
-        {/* The duel */}
-        {conn !== 'closed' && phase === 'playing' && (
-          <section className="screen">
-            <p className="kicker">You vs {game.opponent?.name}</p>
-            <h1>Crack {game.opponent?.name}&apos;s number</h1>
-
-            <div
-              key={game.log.length}
-              className={`hint hint-${lastMine ? lastMine.hint : 'idle'}`}
-            >
-              {lastMine
-                ? lastMine.hint === 'higher'
-                  ? `Go higher than ${lastMine.value} ↑`
-                  : `Go lower than ${lastMine.value} ↓`
-                : `Their number is somewhere from ${game.min} to ${game.max}`}
-            </div>
-
-            {game.yourTurn ? (
-              <form className="form" onSubmit={submitGuess}>
-                <label className="field">
-                  <span>Your guess ({game.min}–{game.max})</span>
-                  <input
-                    inputMode="numeric"
-                    autoComplete="off"
-                    value={guessDraft}
-                    onChange={(event) => setGuessDraft(onlyDigits(event.target.value))}
-                    placeholder={`${game.min} – ${game.max}`}
-                    autoFocus
-                  />
-                </label>
-                {error && <p className="error">{error}</p>}
-                <button className="btn primary" type="submit">
-                  Guess
-                </button>
-              </form>
-            ) : (
-              <p className="lede waiting">Waiting for {game.opponent?.name} to guess…</p>
-            )}
-
-            <div className="race">
-              <div className={`race-cell ${game.yourTurn ? 'turn' : ''}`}>
-                <span>You</span>
-                <strong>{game.me.guesses}</strong>
-                <small>guesses</small>
-              </div>
-              <div className={`race-cell ${!game.yourTurn ? 'turn' : ''}`}>
-                <span>{game.opponent?.name}</span>
-                <strong>{game.opponent?.guesses ?? 0}</strong>
-                <small>guesses</small>
-              </div>
-            </div>
-
-            {feed}
-          </section>
-        )}
-
-        {/* Result */}
-        {conn !== 'closed' && phase === 'over' && (
-          <section className="screen center">
-            {game.endReason === 'disconnect' ? (
-              <>
-                <p className="kicker">Game over</p>
-                <h1>{game.opponent?.name || 'Your opponent'} left</h1>
-                <p className="lede">The other player disconnected, so the game ended.</p>
-                <button className="btn primary" type="button" onClick={newGame}>
-                  Back to lobby
-                </button>
-              </>
-            ) : (
-              <>
-                <p className="kicker">Game over</p>
-                <h1 className={game.winner === game.you ? 'celebrate-title' : ''}>
-                  {game.winner === game.you ? 'You win! 🎉' : `${game.opponent?.name} wins`}
-                </h1>
-                <p className="range-badge">
-                  Range was {game.min} – {game.max}
-                </p>
-                <div className="result-grid">
-                  <div className={`result-cell ${game.winner === game.you ? 'win' : ''}`}>
-                    <span>Your number</span>
-                    <strong>{game.reveal?.yourNumber ?? '—'}</strong>
-                    <small>{game.me.guesses} guesses</small>
-                  </div>
-                  <div className={`result-cell ${game.winner !== game.you ? 'win' : ''}`}>
-                    <span>{game.opponent?.name}&apos;s number</span>
-                    <strong>{game.reveal?.opponentNumber ?? '—'}</strong>
-                    <small>{game.opponent?.guesses ?? 0} guesses</small>
-                  </div>
-                </div>
-                <div className="feed-left">{feed}</div>
-                <div className="form">
-                  {game.opponent?.connected && (
-                    <button className="btn primary" type="button" onClick={playAgain}>
-                      Play again
-                    </button>
-                  )}
-                  <button className="btn ghost" type="button" onClick={newGame}>
-                    Back to lobby
-                  </button>
-                </div>
-              </>
-            )}
-          </section>
-        )}
+        <div key={screenKey}>{body}</div>
       </div>
+      <p className="footer">A two-player arcade · share a code and play anywhere</p>
     </main>
   );
 }
