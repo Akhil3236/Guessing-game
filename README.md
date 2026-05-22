@@ -1,31 +1,45 @@
-# Higher / Lower Duel
+# Duel Arcade
 
-A real-time, two-player higher / lower number game. The players are on
-**separate devices, anywhere** — they connect over the internet with a
-shared room code.
+A real-time, two-player game arcade. The players are on **separate
+devices, anywhere** — they connect over the internet with a shared room
+code.
 
-## How it works
+## Games
 
-1. One player is the **host**: they pick the number range (any range from
-   1 up to 1,000,000), create a game, and get a 4-character room code.
-2. They share the code (the "Copy invite link" button copies a join link).
-3. The other player enters the code and joins.
-4. Each player privately picks a secret number inside the host's range.
-   The numbers live only on the server — neither player ever receives the
-   other's.
-5. Players take turns guessing the *other* player's number, guided by
-   higher / lower hints. **First to crack it wins.** The starting player is
-   chosen at random so it's fair.
-6. As you play, your **own guess history** is shown with its higher /
-   lower hints. Your guesses stay private — the other player never sees
-   them.
+| Game | How it works |
+| --- | --- |
+| **Higher / Lower** | Each player sets a secret number; take turns guessing the other's with higher/lower hints. First to crack it wins. |
+| **Tic-Tac-Toe** | Classic 3×3. Three in a row wins. |
+| **Connect 4** | Drop discs into a 7×6 grid; line up four to win. |
+| **Rock Paper Scissors** | Pick at the same time, best-of-five — first to 3 round wins. |
+| **Hangman** | One player sets a secret word (plus an optional hint), the other guesses letters before the figure is drawn. Roles swap on a rematch. |
+
+## In-game chat & voice
+
+Once a game starts, a chat bar appears at the bottom of the card:
+
+- **Text chat** rides the game's WebSocket — messages are relayed by the
+  server and stay private to the two players.
+- **Voice chat** is a direct peer-to-peer WebRTC audio link; only the
+  handshake travels over the socket. Tap **Voice** to share your mic.
+  Voice needs a secure context, so it works on the deployed HTTPS site
+  or on `localhost` — not over a bare `http://` LAN address.
+
+## How to play
+
+1. Pick a game on the home screen and create it — you get a 4-character
+   room code.
+2. Share the code (the "Copy invite link" button copies a join link).
+3. Your friend enters the code and joins; the game starts instantly.
 
 ## Tech
 
-- **Client** — React + Vite.
+- **Client** — React + Vite. One component per game; a shared lobby/hub.
 - **Server** — Node, Express (serves the built client) and `ws` for the
-  real-time game. The server is authoritative: it holds both secret
-  numbers and only ever sends a player higher/lower hints.
+  real-time games. The server is authoritative: each game module decides
+  what a player is allowed to see, so secrets (numbers, words, picks)
+  never leak to the opponent.
+- Adding a game = one module in `server/games/` plus one React component.
 
 ## Run locally
 
@@ -42,7 +56,7 @@ both sides.
 
 ```bash
 npm run build   # builds the client into dist/
-npm start       # starts the server, which serves dist/ + the game
+npm start       # starts the server, which serves dist/ + the games
 ```
 
 The server listens on `process.env.PORT` (falling back to 3001), so it

@@ -1,12 +1,9 @@
 /**
- * Higher / Lower Duel — game server.
+ * Duel Arcade — game server.
  *
- * Serves the built client (in production) and runs the WebSocket game.
- * The server is authoritative: both secret numbers live here and are never
- * sent to the other player until the game is over.
- *
- * The host (room creator) picks the number range. Each player sees only
- * their own guess history — never the opponent's guesses.
+ * Serves the built client (in production) and runs every game over one
+ * WebSocket. The server is authoritative: each game module decides what
+ * slice of state a player is allowed to see, so secrets never leak.
  */
 import express from 'express';
 import { WebSocketServer } from 'ws';
@@ -14,11 +11,10 @@ import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
+import { GAMES } from './games/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
-const RANGE_FLOOR = 1;
-const RANGE_CEILING = 1000000;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no easily confused chars
 
 // --- HTTP: serve the built client --------------------------------------
@@ -33,7 +29,7 @@ if (existsSync(distDir)) {
 
 const httpServer = createServer(app);
 
-// --- Game state --------------------------------------------------------
+// --- Rooms -------------------------------------------------------------
 
 /** @type {Map<string, Room>} code -> room */
 const rooms = new Map();
@@ -54,28 +50,7 @@ function cleanName(name) {
 }
 
 function makePlayer(ws, name) {
-  return { ws, name: cleanName(name), secret: null };
-}
-
-/** Validate the host's chosen range. Returns {min,max} or null. */
-function parseRange(min, max) {
-  const lo = Number.parseInt(min, 10);
-  const hi = Number.parseInt(max, 10);
-  if (!Number.isInteger(lo) || !Number.isInteger(hi)) return null;
-  if (lo < RANGE_FLOOR || hi > RANGE_CEILING) return null;
-  if (hi <= lo) return null;
-  return { min: lo, max: hi };
-}
-
-/** Validate a number against a room's range. Returns the int or null. */
-function parseNumber(value, min, max) {
-  const n = Number.parseInt(value, 10);
-  if (!Number.isInteger(n) || n < min || n > max) return null;
-  return n;
-}
-
-function guessCount(room, index) {
-  return room.log.reduce((sum, entry) => sum + (entry.by === index ? 1 : 0), 0);
+  return { ws, name: cleanName(name) };
 }
 
 function send(ws, payload) {
@@ -86,41 +61,19 @@ function bothConnected(room) {
   return room.players.every((p) => p && p.ws && p.ws.readyState === 1);
 }
 
-/** Build the slice of state that a given player is allowed to see. */
+/** Build the slice of state a given player is allowed to see. */
 function viewFor(room, index) {
-  const me = room.players[index];
-  const opp = room.players[1 - index];
+  const module = GAMES[room.gameType];
   return {
     type: 'state',
     code: room.code,
+    gameType: room.gameType,
     you: index,
-    phase: room.phase,
-    min: room.min,
-    max: room.max,
-    turn: room.turn,
-    yourTurn: room.phase === 'playing' && room.turn === index,
-    me: {
-      name: me.name,
-      secretSet: me.secret !== null,
-      guesses: guessCount(room, index),
-    },
-    opponent: opp
-      ? {
-          name: opp.name,
-          connected: !!opp.ws && opp.ws.readyState === 1,
-          secretSet: opp.secret !== null,
-          guesses: guessCount(room, 1 - index),
-        }
-      : null,
-    // Only the player's own guesses — each player's guesses stay private.
-    log: room.log.filter((entry) => entry.by === index),
-    winner: room.winner,
-    endReason: room.endReason,
-    // Opponent's number is only ever revealed once the game is over.
-    reveal:
-      room.phase === 'over'
-        ? { yourNumber: me.secret, opponentNumber: opp ? opp.secret : null }
-        : null,
+    phase: room.phase, // waiting | started | abandoned
+    players: room.players.map((p) =>
+      p ? { name: p.name, connected: !!p.ws && p.ws.readyState === 1 } : null,
+    ),
+    game: room.game ? module.view(room.game, index) : null,
   };
 }
 
@@ -132,25 +85,26 @@ function broadcast(room) {
 
 // --- Actions -----------------------------------------------------------
 
-function createRoom(ws, name, min, max) {
-  const range = parseRange(min, max);
-  if (!range) {
-    return send(ws, {
-      type: 'error',
-      message: `Pick a valid range (whole numbers, ${RANGE_FLOOR}–${RANGE_CEILING}, low below high).`,
-    });
+function createRoom(ws, msg) {
+  const module = GAMES[msg.gameType];
+  if (!module) return send(ws, { type: 'error', message: 'Unknown game.' });
+
+  let config = {};
+  if (module.parseConfig) {
+    config = module.parseConfig(msg.config);
+    if (config === null) {
+      return send(ws, { type: 'error', message: module.configError || 'Invalid game settings.' });
+    }
   }
+
   detach(ws);
   const room = {
     code: makeCode(),
-    players: [makePlayer(ws, name), null],
+    gameType: msg.gameType,
+    config,
+    players: [makePlayer(ws, msg.name), null],
     phase: 'waiting',
-    turn: 0,
-    winner: null,
-    endReason: null,
-    min: range.min,
-    max: range.max,
-    log: [],
+    game: null,
   };
   rooms.set(room.code, room);
   ws.roomCode = room.code;
@@ -158,89 +112,70 @@ function createRoom(ws, name, min, max) {
   broadcast(room);
 }
 
-function joinRoom(ws, name, code) {
-  const room = rooms.get(String(code || '').toUpperCase().trim());
-  if (!room) {
-    return send(ws, { type: 'error', message: 'No game found with that code.' });
-  }
-  if (room.players[1]) {
-    return send(ws, { type: 'error', message: 'That game is already full.' });
-  }
+function joinRoom(ws, msg) {
+  const room = rooms.get(String(msg.code || '').toUpperCase().trim());
+  if (!room) return send(ws, { type: 'error', message: 'No game found with that code.' });
+  if (room.players[1]) return send(ws, { type: 'error', message: 'That game is already full.' });
+
   detach(ws);
-  room.players[1] = makePlayer(ws, name);
+  room.players[1] = makePlayer(ws, msg.name);
   ws.roomCode = room.code;
   ws.playerIndex = 1;
-  room.phase = 'setup';
+  room.phase = 'started';
+  room.game = GAMES[room.gameType].create(room.config);
   broadcast(room);
 }
 
-function setSecret(ws, value) {
+function handleGameMessage(ws, msg) {
   const room = rooms.get(ws.roomCode);
-  if (!room || room.phase !== 'setup') return;
-  const me = room.players[ws.playerIndex];
-  if (!me || me.ws !== ws) return;
-
-  const n = parseNumber(value, room.min, room.max);
-  if (n === null) {
-    return send(ws, {
-      type: 'error',
-      message: `Pick a whole number between ${room.min} and ${room.max}.`,
-    });
-  }
-  me.secret = n;
-
-  if (room.players[0].secret !== null && room.players[1].secret !== null) {
-    room.phase = 'playing';
-    room.turn = Math.random() < 0.5 ? 0 : 1; // random starter is fair
-  }
-  broadcast(room);
-}
-
-function makeGuess(ws, value) {
-  const room = rooms.get(ws.roomCode);
-  if (!room || room.phase !== 'playing') return;
-  const i = ws.playerIndex;
-  if (room.turn !== i) return;
-
-  const me = room.players[i];
-  const opp = room.players[1 - i];
-  if (!me || me.ws !== ws || !opp) return;
-
-  const n = parseNumber(value, room.min, room.max);
-  if (n === null) {
-    return send(ws, {
-      type: 'error',
-      message: `Enter a whole number between ${room.min} and ${room.max}.`,
-    });
-  }
-
-  const hint = n === opp.secret ? 'match' : n < opp.secret ? 'higher' : 'lower';
-  room.log.push({ by: i, name: me.name, value: n, hint });
-
-  if (hint === 'match') {
-    room.phase = 'over';
-    room.winner = i;
-    room.endReason = 'win';
-  } else {
-    room.turn = 1 - i;
-  }
+  if (!room || room.phase !== 'started' || !room.game) return;
+  const handler = GAMES[room.gameType].handlers[msg.type];
+  if (!handler) return;
+  const error = handler(room.game, ws.playerIndex, msg);
+  if (error) return send(ws, { type: 'error', message: error });
   broadcast(room);
 }
 
 function rematch(ws) {
   const room = rooms.get(ws.roomCode);
-  if (!room || room.phase !== 'over' || room.endReason !== 'win') return;
+  if (!room || room.phase !== 'started' || !room.game) return;
+  if (room.game.status !== 'over') return;
   if (!bothConnected(room)) return;
-
-  room.players.forEach((p) => {
-    p.secret = null;
-  });
-  room.log = [];
-  room.phase = 'setup';
-  room.turn = 0;
-  room.winner = null;
-  room.endReason = null;
+  const module = GAMES[room.gameType];
+  room.game = module.rematch
+    ? module.rematch(room.config, room.game)
+    : module.create(room.config);
   broadcast(room);
+}
+
+/** Relay a text chat line to everyone in the sender's room. */
+function chat(ws, msg) {
+  const room = rooms.get(ws.roomCode);
+  if (!room) return;
+  const i = ws.playerIndex;
+  if (!room.players[i]) return;
+  const text = String(msg.text || '').trim().slice(0, 500);
+  if (!text) return;
+  const payload = {
+    type: 'chat',
+    from: i,
+    name: room.players[i].name,
+    text,
+    ts: Date.now(),
+  };
+  room.players.forEach((p) => {
+    if (p && p.ws && p.ws.readyState === 1) send(p.ws, payload);
+  });
+}
+
+/** Relay a WebRTC signaling blob to the opponent — the voice-chat handshake. */
+function signal(ws, msg) {
+  const room = rooms.get(ws.roomCode);
+  if (!room) return;
+  const other = room.players[1 - ws.playerIndex];
+  if (other && other.ws && other.ws.readyState === 1) {
+    send(other.ws, { type: 'signal', from: ws.playerIndex, signal: msg.signal });
+  }
 }
 
 /** Remove a socket from its room, ending or cleaning up as needed. */
@@ -252,16 +187,11 @@ function detach(ws) {
   if (!room) return;
 
   const i = ws.playerIndex;
-  const me = room.players[i];
-  if (me && me.ws === ws) me.ws = null;
+  if (room.players[i] && room.players[i].ws === ws) room.players[i].ws = null;
 
   const other = room.players[1 - i];
   if (other && other.ws && other.ws.readyState === 1) {
-    if (room.phase !== 'over') {
-      room.phase = 'over';
-      room.endReason = 'disconnect';
-      room.winner = null;
-    }
+    if (room.phase !== 'abandoned') room.phase = 'abandoned';
     broadcast(room);
   } else {
     rooms.delete(code);
@@ -288,21 +218,22 @@ wss.on('connection', (ws) => {
     } catch {
       return;
     }
+    if (typeof msg?.type !== 'string') return;
     switch (msg.type) {
       case 'create':
-        return createRoom(ws, msg.name, msg.min, msg.max);
+        return createRoom(ws, msg);
       case 'join':
-        return joinRoom(ws, msg.name, msg.code);
-      case 'secret':
-        return setSecret(ws, msg.value);
-      case 'guess':
-        return makeGuess(ws, msg.value);
+        return joinRoom(ws, msg);
       case 'rematch':
         return rematch(ws);
+      case 'chat':
+        return chat(ws, msg);
+      case 'signal':
+        return signal(ws, msg);
       case 'leave':
         return detach(ws);
       default:
-        return;
+        return handleGameMessage(ws, msg);
     }
   });
 
@@ -324,5 +255,5 @@ const heartbeat = setInterval(() => {
 wss.on('close', () => clearInterval(heartbeat));
 
 httpServer.listen(PORT, () => {
-  console.log(`Higher / Lower Duel server listening on :${PORT}`);
+  console.log(`Duel Arcade server listening on :${PORT}`);
 });
