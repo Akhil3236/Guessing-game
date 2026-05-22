@@ -1,7 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
+import confetti from 'canvas-confetti';
 
 const RANGE_FLOOR = 1;
 const RANGE_CEILING = 1000000;
+
+function reducedMotion() {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+}
+
+/** Celebratory confetti — a center burst plus a short side-cannon volley. */
+function celebrate() {
+  if (reducedMotion()) return;
+  const colors = ['#fbbf24', '#38bdf8', '#4ade80', '#fb7185', '#ffffff'];
+  confetti({ particleCount: 150, spread: 95, startVelocity: 45, origin: { y: 0.6 }, colors });
+  const end = Date.now() + 1400;
+  (function frame() {
+    confetti({ particleCount: 5, angle: 60, spread: 65, origin: { x: 0 }, colors });
+    confetti({ particleCount: 5, angle: 120, spread: 65, origin: { x: 1 }, colors });
+    if (Date.now() < end) requestAnimationFrame(frame);
+  })();
+}
 
 function wsUrl() {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -19,6 +37,7 @@ function codeFromUrl() {
 
 export default function App() {
   const ws = useRef(null);
+  const celebrated = useRef(false);
   const [conn, setConn] = useState('connecting'); // connecting | open | closed
   const [game, setGame] = useState(null); // latest server state, or null at home
   const [error, setError] = useState('');
@@ -53,6 +72,18 @@ export default function App() {
     };
     return () => socket.close();
   }, []);
+
+  // Fire confetti once, the moment *you* win.
+  useEffect(() => {
+    const youWon =
+      game && game.phase === 'over' && game.endReason === 'win' && game.winner === game.you;
+    if (youWon && !celebrated.current) {
+      celebrated.current = true;
+      celebrate();
+    } else if (!youWon) {
+      celebrated.current = false;
+    }
+  }, [game]);
 
   const send = (payload) => {
     if (ws.current && ws.current.readyState === 1) {
@@ -356,7 +387,10 @@ export default function App() {
             <p className="kicker">You vs {game.opponent?.name}</p>
             <h1>Crack {game.opponent?.name}&apos;s number</h1>
 
-            <div className={`hint hint-${lastMine ? lastMine.hint : 'idle'}`}>
+            <div
+              key={game.log.length}
+              className={`hint hint-${lastMine ? lastMine.hint : 'idle'}`}
+            >
               {lastMine
                 ? lastMine.hint === 'higher'
                   ? `Go higher than ${lastMine.value} ↑`
@@ -418,7 +452,9 @@ export default function App() {
             ) : (
               <>
                 <p className="kicker">Game over</p>
-                <h1>{game.winner === game.you ? 'You win! 🎉' : `${game.opponent?.name} wins`}</h1>
+                <h1 className={game.winner === game.you ? 'celebrate-title' : ''}>
+                  {game.winner === game.you ? 'You win! 🎉' : `${game.opponent?.name} wins`}
+                </h1>
                 <p className="range-badge">
                   Range was {game.min} – {game.max}
                 </p>
