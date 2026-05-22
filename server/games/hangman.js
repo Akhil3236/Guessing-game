@@ -10,6 +10,7 @@ function create(_config, prev) {
     status: 'setup', // setup | playing | over
     setter, // index of the word-setter
     word: null,
+    hint: '', // optional clue the setter gives the guesser
     guessed: [], // correct letters
     missed: [], // wrong letters
     maxWrong: MAX_WRONG,
@@ -25,6 +26,7 @@ function setWord(state, i, msg) {
     .toUpperCase();
   if (!/^[A-Z]{3,16}$/.test(raw)) return 'Word must be 3–16 letters, no spaces.';
   state.word = raw;
+  state.hint = String(msg.hint || '').trim().slice(0, 80);
   state.status = 'playing';
   return null;
 }
@@ -67,6 +69,7 @@ function view(state, i) {
   return {
     status: state.status,
     youAreSetter,
+    hint: state.hint,
     wordLength: state.word ? state.word.length : 0,
     letters,
     guessed: state.guessed,

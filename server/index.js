@@ -148,6 +148,36 @@ function rematch(ws) {
   broadcast(room);
 }
 
+/** Relay a text chat line to everyone in the sender's room. */
+function chat(ws, msg) {
+  const room = rooms.get(ws.roomCode);
+  if (!room) return;
+  const i = ws.playerIndex;
+  if (!room.players[i]) return;
+  const text = String(msg.text || '').trim().slice(0, 500);
+  if (!text) return;
+  const payload = {
+    type: 'chat',
+    from: i,
+    name: room.players[i].name,
+    text,
+    ts: Date.now(),
+  };
+  room.players.forEach((p) => {
+    if (p && p.ws && p.ws.readyState === 1) send(p.ws, payload);
+  });
+}
+
+/** Relay a WebRTC signaling blob to the opponent — the voice-chat handshake. */
+function signal(ws, msg) {
+  const room = rooms.get(ws.roomCode);
+  if (!room) return;
+  const other = room.players[1 - ws.playerIndex];
+  if (other && other.ws && other.ws.readyState === 1) {
+    send(other.ws, { type: 'signal', from: ws.playerIndex, signal: msg.signal });
+  }
+}
+
 /** Remove a socket from its room, ending or cleaning up as needed. */
 function detach(ws) {
   const code = ws.roomCode;
@@ -196,6 +226,10 @@ wss.on('connection', (ws) => {
         return joinRoom(ws, msg);
       case 'rematch':
         return rematch(ws);
+      case 'chat':
+        return chat(ws, msg);
+      case 'signal':
+        return signal(ws, msg);
       case 'leave':
         return detach(ws);
       default:

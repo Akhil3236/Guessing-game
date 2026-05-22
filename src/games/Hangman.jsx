@@ -30,6 +30,7 @@ export default function Hangman({ game, players, you, send, onLeave, error }) {
   const opp = players[1 - you]?.name || 'Opponent';
   const canRematch = players.every((p) => p?.connected);
   const [wordDraft, setWordDraft] = useState('');
+  const [hintDraft, setHintDraft] = useState('');
 
   if (game.status === 'setup') {
     if (game.youAreSetter) {
@@ -44,7 +45,7 @@ export default function Hangman({ game, players, you, send, onLeave, error }) {
             className="form"
             onSubmit={(e) => {
               e.preventDefault();
-              send({ type: 'word', value: wordDraft });
+              send({ type: 'word', value: wordDraft, hint: hintDraft });
             }}
           >
             <label className="field">
@@ -61,6 +62,19 @@ export default function Hangman({ game, players, you, send, onLeave, error }) {
                 spellCheck={false}
                 className="hm-word-input"
               />
+            </label>
+            <label className="field">
+              <span>Hint for {opp} (optional)</span>
+              <input
+                value={hintDraft}
+                onChange={(e) => setHintDraft(e.target.value.slice(0, 80))}
+                placeholder="e.g. A board game, or: rhymes with riddle"
+                autoComplete="off"
+                maxLength={80}
+              />
+              <small className="muted">
+                A category or clue makes it fairer. Leave it blank for a tough round.
+              </small>
             </label>
             {error && <p className="error">{error}</p>}
             <button className="btn primary" type="submit" disabled={wordDraft.length < 3}>
@@ -96,6 +110,13 @@ export default function Hangman({ game, players, you, send, onLeave, error }) {
     <section className="screen center">
       <p className="kicker">Hangman · vs {opp}</p>
       <h1 className={over && game.youWon ? 'celebrate-title' : ''}>{statusText}</h1>
+
+      {game.hint && (
+        <p className="hm-hint">
+          <span className="hm-hint-tag">💡 Hint</span>
+          {game.hint}
+        </p>
+      )}
 
       <div className="hm-stage">
         <Figure wrong={game.wrongCount} />

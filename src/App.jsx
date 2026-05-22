@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import HigherLower from './games/HigherLower.jsx';
 import TicTacToe from './games/TicTacToe.jsx';
 import Connect4 from './games/Connect4.jsx';
 import RockPaperScissors from './games/RockPaperScissors.jsx';
 import Hangman from './games/Hangman.jsx';
+import Comms from './Comms.jsx';
 
 const GAMES = {
   'higher-lower': {
@@ -79,16 +80,20 @@ export default function App() {
         setError('');
       } else if (msg.type === 'error') {
         setError(msg.message);
+      } else if (msg.type === 'chat') {
+        window.dispatchEvent(new CustomEvent('arcade-chat', { detail: msg }));
+      } else if (msg.type === 'signal') {
+        window.dispatchEvent(new CustomEvent('arcade-signal', { detail: msg }));
       }
     };
     return () => socket.close();
   }, []);
 
-  const send = (payload) => {
+  const send = useCallback((payload) => {
     if (ws.current && ws.current.readyState === 1) {
       ws.current.send(JSON.stringify(payload));
     }
-  };
+  }, []);
 
   const rangeLo = Number.parseInt(rangeMin, 10);
   const rangeHi = Number.parseInt(rangeMax, 10);
@@ -324,7 +329,13 @@ export default function App() {
   else if (state && state.phase === 'abandoned') screenKey = 'abandoned';
   else if (state && state.phase === 'waiting') screenKey = 'waiting';
   else if (state && state.phase === 'started' && state.game)
-    screenKey = `game-${state.gameType}-${state.game.status}`;
+    // Connect 4 keeps a stable key so the body never remounts on the
+    // playing→over transition — that lets the winning disc finish its
+    // drop animation instead of snapping into place.
+    screenKey =
+      state.gameType === 'connect-4'
+        ? 'game-connect-4'
+        : `game-${state.gameType}-${state.game.status}`;
   else if (picked) screenKey = `lobby-${picked}`;
 
   return (
@@ -339,6 +350,9 @@ export default function App() {
           )}
         </header>
         <div key={screenKey}>{body}</div>
+        {state && state.phase === 'started' && (
+          <Comms send={send} you={state.you} players={state.players} />
+        )}
       </div>
       <p className="footer">A two-player arcade · share a code and play anywhere</p>
     </main>

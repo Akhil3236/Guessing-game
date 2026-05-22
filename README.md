@@ -12,7 +12,18 @@ code.
 | **Tic-Tac-Toe** | Classic 3×3. Three in a row wins. |
 | **Connect 4** | Drop discs into a 7×6 grid; line up four to win. |
 | **Rock Paper Scissors** | Pick at the same time, best-of-five — first to 3 round wins. |
-| **Hangman** | One player sets a secret word, the other guesses letters before the figure is drawn. Roles swap on a rematch. |
+| **Hangman** | One player sets a secret word (plus an optional hint), the other guesses letters before the figure is drawn. Roles swap on a rematch. |
+
+## In-game chat & voice
+
+Once a game starts, a chat bar appears at the bottom of the card:
+
+- **Text chat** rides the game's WebSocket — messages are relayed by the
+  server and stay private to the two players.
+- **Voice chat** is a direct peer-to-peer WebRTC audio link; only the
+  handshake travels over the socket. Tap **Voice** to share your mic.
+  Voice needs a secure context, so it works on the deployed HTTPS site
+  or on `localhost` — not over a bare `http://` LAN address.
 
 ## How to play
 
