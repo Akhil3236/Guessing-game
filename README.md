@@ -16,8 +16,9 @@ shared room code.
 5. Players take turns guessing the *other* player's number, guided by
    higher / lower hints. **First to crack it wins.** The starting player is
    chosen at random so it's fair.
-6. A **shared guess feed** shows every guess from both players in real
-   time, so you can watch your opponent close in on your number.
+6. As you play, your **own guess history** is shown with its higher /
+   lower hints. Your guesses stay private — the other player never sees
+   them.
 
 ## Tech
 

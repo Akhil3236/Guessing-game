@@ -129,25 +129,23 @@ export default function App() {
           ? 3
           : 4;
 
-  const myLog = game ? game.log.filter((entry) => entry.by === game.you) : [];
-  const lastMine = myLog.length ? myLog[myLog.length - 1] : null;
+  // The server only ever sends a player their own guesses.
+  const lastMine = game && game.log.length ? game.log[game.log.length - 1] : null;
 
-  // Shared guess feed — every guess from both players, newest first.
+  // Private guess feed — only your own guesses, newest first.
   const feed = game ? (
     <div className="feed-wrap">
-      <p className="feed-label">All guesses ({game.log.length})</p>
+      <p className="feed-label">Your guesses ({game.log.length})</p>
       {game.log.length === 0 ? (
-        <div className="feed empty">No guesses yet.</div>
+        <div className="feed empty">You haven&apos;t guessed yet.</div>
       ) : (
         <div className="feed">
           {game.log
-            .map((entry, i) => ({ ...entry, id: i }))
+            .map((entry, i) => ({ ...entry, num: i + 1 }))
             .reverse()
             .map((entry) => (
-              <div key={entry.id} className={`feed-row ${entry.by === game.you ? 'mine' : ''}`}>
-                <span className="feed-name">
-                  {entry.by === game.you ? 'You' : entry.name}
-                </span>
+              <div key={entry.num} className="feed-row">
+                <span className="feed-num">#{entry.num}</span>
                 <span className="feed-value">{entry.value}</span>
                 <span className={`feed-hint ${entry.hint}`}>
                   {entry.hint === 'higher'

@@ -5,8 +5,8 @@
  * The server is authoritative: both secret numbers live here and are never
  * sent to the other player until the game is over.
  *
- * The host (room creator) picks the number range. Every guess is recorded
- * in a shared log that both players can see.
+ * The host (room creator) picks the number range. Each player sees only
+ * their own guess history — never the opponent's guesses.
  */
 import express from 'express';
 import { WebSocketServer } from 'ws';
@@ -112,9 +112,8 @@ function viewFor(room, index) {
           guesses: guessCount(room, 1 - index),
         }
       : null,
-    // Every guess from both players — safe to share: a guess reveals
-    // nothing about the guesser's own secret, only the target's.
-    log: room.log,
+    // Only the player's own guesses — each player's guesses stay private.
+    log: room.log.filter((entry) => entry.by === index),
     winner: room.winner,
     endReason: room.endReason,
     // Opponent's number is only ever revealed once the game is over.
