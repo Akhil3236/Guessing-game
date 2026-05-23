@@ -967,6 +967,27 @@ input:focus {
   background: #0f1729;
 }
 
+/* Browsers block remote audio autoplay without a gesture — this button
+   gives the user one and is animated so it can't be missed. */
+.comms-unmute {
+  display: block;
+  width: 100%;
+  padding: 0.75rem 0.9rem;
+  font-weight: 800;
+  font-size: 0.95rem;
+  text-align: center;
+  color: #04210f;
+  background: var(--win);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  animation: glow-pulse 1.6s ease-in-out infinite;
+}
+
+.comms-unmute:hover {
+  background: #5eecaa;
+}
+
 .comms-bar {
   display: flex;
   gap: 0.5rem;

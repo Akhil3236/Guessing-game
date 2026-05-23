@@ -9,10 +9,22 @@
  */
 import { useEffect, useRef, useState } from 'react';
 
+// STUN handles same-LAN and most home-router pairs. The free OpenRelay
+// TURN servers cover the symmetric-NAT case where STUN candidates
+// can't reach each other — last-resort, but better than silent failure.
 const RTC_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    {
+      urls: [
+        'turn:openrelay.metered.ca:80',
+        'turn:openrelay.metered.ca:443',
+        'turn:openrelay.metered.ca:443?transport=tcp',
+      ],
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
   ],
 };
 
@@ -26,6 +38,9 @@ export default function Comms({ send, you, players }) {
   const [micState, setMicState] = useState('idle'); // idle | starting | on | muted | error
   const [voiceConn, setVoiceConn] = useState('idle'); // idle | connecting | live | failed
   const [remoteJoined, setRemoteJoined] = useState(false);
+  // True when the browser refused to autoplay the remote audio without
+  // a gesture — surfaces a "Tap to hear" button the user can press.
+  const [needsAudioGesture, setNeedsAudioGesture] = useState(false);
 
   const pcRef = useRef(null);
   const localStreamRef = useRef(null);
@@ -40,6 +55,23 @@ export default function Comms({ send, you, players }) {
 
   openRef.current = open;
   const polite = you === 1; // perfect-negotiation roles: P2 yields on a clash
+
+  // Try to play the remote audio. Browsers block this without a recent
+  // user gesture; on failure we flag it so the UI can offer a "tap to
+  // hear" prompt that has a gesture in its call stack and will succeed.
+  function attemptPlay() {
+    const el = audioRef.current;
+    if (!el || !el.srcObject) return;
+    el.muted = false;
+    el.volume = 1;
+    const p = el.play();
+    if (p && typeof p.then === 'function') {
+      p.then(
+        () => setNeedsAudioGesture(false),
+        () => setNeedsAudioGesture(true),
+      );
+    }
+  }
 
   const pushSystem = (text) =>
     setMessages((prev) => [...prev, { id: `s${(idRef.current += 1)}`, system: true, text }]);
@@ -67,7 +99,7 @@ export default function Comms({ send, you, players }) {
     pc.ontrack = ({ streams }) => {
       if (audioRef.current && streams[0]) {
         audioRef.current.srcObject = streams[0];
-        audioRef.current.play?.().catch(() => {});
+        attemptPlay();
       }
       setRemoteJoined(true);
       if (!remoteAnnounced.current) {
@@ -125,6 +157,10 @@ export default function Comms({ send, you, players }) {
   signalRef.current = handleSignal;
 
   async function toggleVoice() {
+    // The user just clicked, which counts as a gesture — if the remote
+    // audio has been waiting to play, this is the moment to start it.
+    attemptPlay();
+
     // Already running — just flip the local track on or off (no renegotiation).
     if (micState === 'on' || micState === 'muted') {
       const enable = micState === 'muted';
@@ -134,6 +170,13 @@ export default function Comms({ send, you, players }) {
       setMicState(enable ? 'on' : 'muted');
       return;
     }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMicState('error');
+      pushSystem('⚠️ Voice needs a secure (HTTPS) page — your browser blocked mic access.');
+      return;
+    }
+
     // First time: ask for the mic and add it to the peer connection.
     setMicState('starting');
     try {
@@ -147,9 +190,18 @@ export default function Comms({ send, you, players }) {
       setVoiceConn((v) => (v === 'idle' ? 'connecting' : v));
       pushSystem('🎙️ You joined voice chat.');
       if (!open) setOpen(true);
-    } catch {
+    } catch (err) {
       setMicState('error');
-      pushSystem('⚠️ Microphone blocked — allow mic access in your browser.');
+      let why = 'allow mic access in your browser';
+      const name = err?.name;
+      if (name === 'NotAllowedError' || name === 'SecurityError') {
+        why = 'permission denied — enable the mic for this site in browser settings';
+      } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+        why = 'no microphone was found on this device';
+      } else if (name === 'NotReadableError' || name === 'AbortError') {
+        why = 'mic is in use by another app — close it and try again';
+      }
+      pushSystem(`⚠️ Microphone unavailable — ${why}.`);
     }
   }
 
@@ -223,6 +275,11 @@ export default function Comms({ send, you, players }) {
 
   return (
     <section className={`comms ${open ? 'open' : ''}`}>
+      {needsAudioGesture && (
+        <button type="button" className="comms-unmute" onClick={attemptPlay}>
+          🔊 Tap to hear {opp} talking
+        </button>
+      )}
       <div className="comms-bar">
         <button type="button" className="comms-toggle" onClick={() => setOpen((o) => !o)}>
           <span>💬 Chat</span>
@@ -281,7 +338,7 @@ export default function Comms({ send, you, players }) {
       )}
 
       {/* Remote voice — kept mounted so audio plays even when chat is closed. */}
-      <audio ref={audioRef} autoPlay />
+      <audio ref={audioRef} autoPlay playsInline />
     </section>
   );
 }
